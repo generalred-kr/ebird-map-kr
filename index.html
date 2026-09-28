@@ -114,6 +114,15 @@
 		});
 	}
 
+	function hotspotPopupHtml(h, speciesHtml) {
+		return `
+			<div class="eb-pop-title">${escHtml(h.name)}</div>
+			<div class="eb-pop-sub">지금까지 ${h.numSpeciesAllTime ?? '-'}종 관찰 · 최근 관찰 ${escHtml(h.latestObsDt) || '-'}</div>
+			<a class="eb-pop-link" href="${mapLinkFor(h.lat, h.lng)}" target="_blank" rel="noopener">네이버 지도에서 길찾기</a>
+			<div class="eb-pop-sub" style="margin-top:6px;">${speciesHtml}</div>
+		`;
+	}
+
 	async function loadHotspots() {
 		try {
 			const res = await fetch(`${EBIRD_API}/hotspots?limit=60`).then(r => r.json());
@@ -121,11 +130,23 @@
 			res.hotspots.forEach(h => {
 				if (h.lat == null || h.lng == null) return;
 				const m = L.marker([h.lat, h.lng], { icon: hotspotIcon() });
-				m.bindPopup(`
-					<div class="eb-pop-title">${escHtml(h.name)}</div>
-					<div class="eb-pop-sub">지금까지 ${h.numSpeciesAllTime ?? '-'}종 관찰 · 최근 관찰 ${escHtml(h.latestObsDt) || '-'}</div>
-					<a class="eb-pop-link" href="${mapLinkFor(h.lat, h.lng)}" target="_blank" rel="noopener">네이버 지도에서 길찾기</a>
-				`);
+				m.bindPopup(hotspotPopupHtml(h, h.locId ? '최근 관찰종 불러오는 중...' : '(이 핫스팟은 최근 관찰종 정보 없음)'));
+				let loaded = false;
+				m.on('popupopen', async () => {
+					if (loaded || !h.locId) return;
+					loaded = true;
+					try {
+						const r2 = await fetch(`${EBIRD_API}/hotspot/${encodeURIComponent(h.locId)}/recent?maxResults=30`).then(r => r.json());
+						const list = (r2 && r2.observations) || [];
+						const html = list.length
+							? '최근 관찰종 (' + list.length + '): ' + list.map(o => escHtml(koreanName(o.speciesCode, o.comName))).join(', ')
+							: '최근 관찰 기록이 없습니다.';
+						m.setPopupContent(hotspotPopupHtml(h, html));
+					} catch (e) {
+						loaded = false;
+						m.setPopupContent(hotspotPopupHtml(h, '최근 관찰종을 불러오지 못했습니다.'));
+					}
+				});
 				hotspotLayer.addLayer(m);
 			});
 		} catch (e) { console.error('hotspots load failed', e); }
