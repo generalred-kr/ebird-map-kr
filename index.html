@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>eBird 한국 지도</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
+<style>
+	html, body { margin: 0; padding: 0; height: 100%; background: #111; font-family: -apple-system, "Malgun Gothic", sans-serif; }
+	#map { position: absolute; top: 56px; left: 0; right: 0; bottom: 0; }
+	#topbar {
+		position: absolute; top: 0; left: 0; right: 0; height: 56px; z-index: 1000;
+		background: #1b1b1b; color: #eee; display: flex; align-items: center; gap: 14px;
+		padding: 0 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.4); box-sizing: border-box;
+	}
+	#topbar h1 { font-size: 15px; margin: 0; color: #FFD700; white-space: nowrap; }
+	.eb-toggle { display: flex; align-items: center; gap: 5px; font-size: 13px; color: #ccc; cursor: pointer; user-select: none; }
+	.eb-toggle input { cursor: pointer; }
+	.eb-btn { background: #2a2a2a; color: #ddd; border: 1px solid #444; border-radius: 6px; padding: 5px 10px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+	.eb-btn:hover { background: #3a3a3a; }
+	#eb-status { margin-left: auto; font-size: 12px; color: #888; white-space: nowrap; }
+	.leaflet-popup-content-wrapper { background: #1b1b1b; color: #eee; }
+	.leaflet-popup-tip { background: #1b1b1b; }
+	.eb-pop-title { font-weight: bold; font-size: 13px; margin-bottom: 4px; }
+	.eb-pop-sci { color: #9ad; font-style: italic; font-size: 11px; }
+	.eb-pop-sub { color: #aaa; font-size: 12px; margin: 4px 0; line-height: 1.5; }
+	.eb-pop-link { display: inline-block; margin-top: 4px; color: #5ac8fa; text-decoration: none; font-size: 12px; }
+	.eb-pop-link:hover { text-decoration: underline; }
+	.eb-legend { position: absolute; bottom: 20px; left: 10px; z-index: 1000; background: rgba(27,27,27,0.9); color: #ccc; padding: 8px 12px; border-radius: 8px; font-size: 12px; line-height: 1.8; }
+	.eb-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+	<h1>🗺️ eBird 한국 지도</h1>
+	<label class="eb-toggle"><input type="checkbox" id="chk-hotspot" checked> 핫스팟</label>
+	<label class="eb-toggle"><input type="checkbox" id="chk-notable" checked> 희귀종 소식</label>
+	<label class="eb-toggle"><input type="checkbox" id="chk-near" checked> 주변 핫스팟</label>
+	<label class="eb-toggle"><input type="checkbox" id="chk-species" checked> 종 추적</label>
+	<button class="eb-btn" id="btn-near" title="지금 보이는 화면 주변의 핫스팟을 더 찾는다">현재 화면 주변 핫스팟 찾기</button>
+	<span id="eb-status">불러오는 중...</span>
+</div>
+
+<div id="map"></div>
+<div class="eb-legend">
+	<div><span class="eb-dot" style="background:#5ac8fa;"></span>핫스팟 (관찰 종 수)</div>
+	<div><span class="eb-dot" style="background:#ff5555;"></span>희귀종 소식 (최근 30일)</div>
+	<div><span class="eb-dot" style="background:#7CFC00;"></span>주변 핫스팟 (직접 검색)</div>
+	<div><span class="eb-dot" style="background:#FFD700;"></span>종 추적 (희귀종 소식에서 "최근 위치 더보기")</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script>
+	// 이 페이지는 계통도 앱(bird-phylogeny-2d)과는 별개의 독립 사이트다.
+	// 데이터는 같은 eBird 중계 서버(라즈베리파이)를 그대로 공유해서 쓴다.
+	const EBIRD_API = 'https://birdmap.redfeather.me/api/ebird';
+	const EBIRD_NOTABLE_REGION = 'KR';
+
+	const map = L.map('map', { zoomControl: true }).setView([36.5, 127.8], 7);
+	// MapTiler 무료 API 키(가입 시 발급, 비상업적 사용 무료 한도 내).
+	const MAPTILER_KEY = '2N9L4dWVjb7d6W38WzUy';
+	L.tileLayer(`https://api.maptiler.com/maps/dataviz-dark/{z}/{x}/{y}.png?key=${MAPTILER_KEY}`, {
+		maxZoom: 20,
+		attribution: '&copy; <a href="https://www.maptiler.com/copyright/">MapTiler</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+	}).addTo(map);
+
+	const hotspotLayer = L.layerGroup().addTo(map);
+	const notableLayer = L.layerGroup().addTo(map);
+	const nearLayer = L.layerGroup().addTo(map);      // "현재 화면 주변 핫스팟 찾기"로 추가된 것들
+	const speciesLayer = L.layerGroup().addTo(map);   // 특정 종의 최근 관찰 위치("종 추적")
+
+	function escHtml(s) {
+		return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+	}
+
+	// 같은 좌표를 소수점 5자리로 반올림해 지도 링크로 넘긴다. 네이버 지도 앱은
+	// 좌표 소수점이 너무 길면(eBird 원본은 7자리) 인식을 못 하는 경우가 있었다.
+	function mapLinkFor(lat, lng) {
+		const la = Math.round(lat * 1e5) / 1e5;
+		const lo = Math.round(lng * 1e5) / 1e5;
+		return `https://map.naver.com/p/search/${encodeURIComponent(la + ',' + lo)}`;
+	}
+
+	function hotspotIcon() {
+		return L.divIcon({
+			className: '', html: '<div style="width:14px;height:14px;border-radius:50%;background:#5ac8fa;border:2px solid #0a3a52;"></div>',
+			iconSize: [14, 14], iconAnchor: [7, 7]
+		});
+	}
+	function notableIcon() {
+		return L.divIcon({
+			className: '', html: '<div style="width:14px;height:14px;border-radius:50%;background:#ff5555;border:2px solid #6a0000;"></div>',
+			iconSize: [14, 14], iconAnchor: [7, 7]
+		});
+	}
+	function nearIcon() {
+		return L.divIcon({
+			className: '', html: '<div style="width:12px;height:12px;border-radius:50%;background:#7CFC00;border:2px solid #1a4a00;"></div>',
+			iconSize: [12, 12], iconAnchor: [6, 6]
+		});
+	}
+	function speciesIcon() {
+		return L.divIcon({
+			className: '', html: '<div style="width:12px;height:12px;border-radius:50%;background:#FFD700;border:2px solid #6a5200;"></div>',
+			iconSize: [12, 12], iconAnchor: [6, 6]
+		});
+	}
+
+	async function loadHotspots() {
+		try {
+			const res = await fetch(`${EBIRD_API}/hotspots?limit=60`).then(r => r.json());
+			if (!res || !res.hotspots) return;
+			res.hotspots.forEach(h => {
+				if (h.lat == null || h.lng == null) return;
+				const m = L.marker([h.lat, h.lng], { icon: hotspotIcon() });
+				m.bindPopup(`
+					<div class="eb-pop-title">${escHtml(h.name)}</div>
+					<div class="eb-pop-sub">지금까지 ${h.numSpeciesAllTime ?? '-'}종 관찰 · 최근 관찰 ${escHtml(h.latestObsDt) || '-'}</div>
+					<a class="eb-pop-link" href="${mapLinkFor(h.lat, h.lng)}" target="_blank" rel="noopener">네이버 지도에서 길찾기</a>
+				`);
+				hotspotLayer.addLayer(m);
+			});
+		} catch (e) { console.error('hotspots load failed', e); }
+	}
+
+	async function loadNotable() {
+		try {
+			const res = await fetch(`${EBIRD_API}/notable?region=${encodeURIComponent(EBIRD_NOTABLE_REGION)}&back=30&maxResults=100`).then(r => r.json());
+			if (!res || !res.notable) return;
+			res.notable.forEach(o => {
+				if (o.lat == null || o.lng == null) return;
+				const m = L.marker([o.lat, o.lng], { icon: notableIcon() });
+				const trackBtn = o.speciesCode
+					? `<a class="eb-pop-link" href="#" onclick="trackSpecies('${o.speciesCode}', '${escHtml(o.comName || o.sciName).replace(/'/g, "\\'")}');return false;">이 종 최근 위치 더보기</a>`
+					: '';
+				m.bindPopup(`
+					<div class="eb-pop-title">${escHtml(o.comName || o.sciName)}</div>
+					<div class="eb-pop-sci">${escHtml(o.sciName)}</div>
+					<div class="eb-pop-sub">${escHtml(o.locName)} · ${escHtml(o.obsDt)}${o.howMany ? ' · ' + o.howMany + '개체' : ''}</div>
+					<a class="eb-pop-link" href="${mapLinkFor(o.lat, o.lng)}" target="_blank" rel="noopener">네이버 지도에서 길찾기</a><br>
+					${trackBtn}
+				`);
+				notableLayer.addLayer(m);
+			});
+		} catch (e) { console.error('notable load failed', e); }
+	}
+
+	// "현재 화면 주변 핫스팟 찾기" 버튼: 지도 중심 좌표 기준 반경 내 핫스팟을 추가로 불러온다.
+	async function loadNear() {
+		const statusEl = document.getElementById('eb-status');
+		const c = map.getCenter();
+		statusEl.textContent = '주변 핫스팟 찾는 중...';
+		try {
+			const res = await fetch(`${EBIRD_API}/hotspots/near?lat=${c.lat}&lng=${c.lng}&dist=30&limit=40`).then(r => r.json());
+			if (!res || res.error) { statusEl.textContent = res && res.error ? res.error : '주변 핫스팟을 못 찾았습니다.'; return; }
+			nearLayer.clearLayers();
+			(res.hotspots || []).forEach(h => {
+				if (h.lat == null || h.lng == null) return;
+				const m = L.marker([h.lat, h.lng], { icon: nearIcon() });
+				m.bindPopup(`
+					<div class="eb-pop-title">${escHtml(h.name)}</div>
+					<div class="eb-pop-sub">지금까지 ${h.numSpeciesAllTime ?? '-'}종 관찰 · 최근 관찰 ${escHtml(h.latestObsDt) || '-'}</div>
+					<a class="eb-pop-link" href="${mapLinkFor(h.lat, h.lng)}" target="_blank" rel="noopener">네이버 지도에서 길찾기</a>
+				`);
+				nearLayer.addLayer(m);
+			});
+			statusEl.textContent = `주변 핫스팟 ${nearLayer.getLayers().length}곳 찾음`;
+		} catch (e) { console.error('near hotspots load failed', e); statusEl.textContent = '주변 핫스팟을 못 불러왔습니다.'; }
+	}
+
+	// 희귀종 소식 팝업의 "이 종 최근 위치 더보기"에서 호출. 그 종의 최근 관찰 위치를 노란 점으로 찍는다.
+	async function trackSpecies(speciesCode, label) {
+		const statusEl = document.getElementById('eb-status');
+		statusEl.textContent = `${label} 최근 위치 찾는 중...`;
+		try {
+			const res = await fetch(`${EBIRD_API}/species/${encodeURIComponent(speciesCode)}/recent?region=KR&back=30&maxResults=50`).then(r => r.json());
+			if (!res || res.error) { statusEl.textContent = res && res.error ? res.error : '종 위치를 못 찾았습니다.'; return; }
+			speciesLayer.clearLayers();
+			const pts = [];
+			(res.observations || []).forEach(o => {
+				if (o.lat == null || o.lng == null) return;
+				pts.push([o.lat, o.lng]);
+				const m = L.marker([o.lat, o.lng], { icon: speciesIcon() });
+				m.bindPopup(`
+					<div class="eb-pop-title">${escHtml(label)}</div>
+					<div class="eb-pop-sub">${escHtml(o.locName)} · ${escHtml(o.obsDt)}${o.howMany ? ' · ' + o.howMany + '개체' : ''}</div>
+					<a class="eb-pop-link" href="${mapLinkFor(o.lat, o.lng)}" target="_blank" rel="noopener">네이버 지도에서 길찾기</a>
+				`);
+				speciesLayer.addLayer(m);
+			});
+			if (pts.length) map.fitBounds(pts, { padding: [40, 40], maxZoom: 12 });
+			statusEl.textContent = `${label} 최근 위치 ${pts.length}곳`;
+		} catch (e) { console.error('species track failed', e); statusEl.textContent = '종 위치를 못 불러왔습니다.'; }
+	}
+
+	async function loadAll() {
+		const statusEl = document.getElementById('eb-status');
+		statusEl.textContent = '불러오는 중...';
+		await Promise.all([loadHotspots(), loadNotable()]);
+		statusEl.textContent = `핫스팟 ${hotspotLayer.getLayers().length}곳 · 희귀종 소식 ${notableLayer.getLayers().length}건`;
+	}
+
+	document.getElementById('chk-hotspot').addEventListener('change', (e) => {
+		if (e.target.checked) map.addLayer(hotspotLayer); else map.removeLayer(hotspotLayer);
+	});
+	document.getElementById('chk-notable').addEventListener('change', (e) => {
+		if (e.target.checked) map.addLayer(notableLayer); else map.removeLayer(notableLayer);
+	});
+	document.getElementById('chk-near').addEventListener('change', (e) => {
+		if (e.target.checked) map.addLayer(nearLayer); else map.removeLayer(nearLayer);
+	});
+	document.getElementById('chk-species').addEventListener('change', (e) => {
+		if (e.target.checked) map.addLayer(speciesLayer); else map.removeLayer(speciesLayer);
+	});
+	document.getElementById('btn-near').addEventListener('click', loadNear);
+
+	loadAll();
+</script>
+</body>
+</html>
