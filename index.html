@@ -63,8 +63,7 @@
 	const MAPTILER_KEY = '2N9L4dWVjb7d6W38WzUy';
 	L.maptiler.maptilerLayer({
 		apiKey: MAPTILER_KEY,
-		style: L.MaptilerStyle ? L.MaptilerStyle.STREETS : undefined,
-		language: L.MaptilerLanguage ? L.MaptilerLanguage.KOREAN : undefined
+		language: 'ko'
 	}).addTo(map);
 
 	const hotspotLayer = L.layerGroup().addTo(map);
