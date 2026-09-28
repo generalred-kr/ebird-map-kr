@@ -36,9 +36,7 @@
 	<h1>🗺️ eBird 한국 지도</h1>
 	<label class="eb-toggle"><input type="checkbox" id="chk-hotspot" checked> 핫스팟</label>
 	<label class="eb-toggle"><input type="checkbox" id="chk-notable" checked> 희귀종 소식</label>
-	<label class="eb-toggle"><input type="checkbox" id="chk-near" checked> 주변 핫스팟</label>
 	<label class="eb-toggle"><input type="checkbox" id="chk-species" checked> 종 추적</label>
-	<button class="eb-btn" id="btn-near" title="지금 보이는 화면 주변의 핫스팟을 더 찾는다">현재 화면 주변 핫스팟 찾기</button>
 	<span id="eb-status">불러오는 중...</span>
 </div>
 
@@ -46,8 +44,7 @@
 <div class="eb-legend">
 	<div><span class="eb-dot" style="background:#5ac8fa;"></span>핫스팟 (관찰 종 수)</div>
 	<div><span class="eb-dot" style="background:#ff5555;"></span>희귀종 소식 (최근 30일)</div>
-	<div><span class="eb-dot" style="background:#7CFC00;"></span>주변 핫스팟 (직접 검색)</div>
-	<div><span class="eb-dot" style="background:#FFD700;"></span>종 추적 (희귀종 소식에서 "최근 위치 더보기")</div>
+	<div><span class="eb-dot" style="background:#FFD700;"></span>종 추적: 희귀종 소식 점을 클릭 → 팝업의 "이 새 최근 위치 더보기" 누르면 표시</div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
@@ -67,7 +64,6 @@
 
 	const hotspotLayer = L.layerGroup().addTo(map);
 	const notableLayer = L.layerGroup().addTo(map);
-	const nearLayer = L.layerGroup().addTo(map);      // "현재 화면 주변 핫스팟 찾기"로 추가된 것들
 	const speciesLayer = L.layerGroup().addTo(map);   // 특정 종의 최근 관찰 위치("종 추적")
 
 	function escHtml(s) {
@@ -92,12 +88,6 @@
 		return L.divIcon({
 			className: '', html: '<div style="width:14px;height:14px;border-radius:50%;background:#ff5555;border:2px solid #6a0000;"></div>',
 			iconSize: [14, 14], iconAnchor: [7, 7]
-		});
-	}
-	function nearIcon() {
-		return L.divIcon({
-			className: '', html: '<div style="width:12px;height:12px;border-radius:50%;background:#7CFC00;border:2px solid #1a4a00;"></div>',
-			iconSize: [12, 12], iconAnchor: [6, 6]
 		});
 	}
 	function speciesIcon() {
@@ -132,13 +122,13 @@
 				if (o.lat == null || o.lng == null) return;
 				const m = L.marker([o.lat, o.lng], { icon: notableIcon() });
 				const trackBtn = o.speciesCode
-					? `<a class="eb-pop-link" href="#" onclick="trackSpecies('${o.speciesCode}', '${escHtml(o.comName || o.sciName).replace(/'/g, "\\'")}');return false;">이 종 최근 위치 더보기</a>`
-					: '';
+					? `<br><a class="eb-pop-link" href="#" onclick="trackSpecies('${o.speciesCode}', '${escHtml(o.comName || o.sciName).replace(/'/g, "\\'")}');return false;">🟡 이 새 최근 위치 더보기</a>`
+					: '<br><span style="color:#666;font-size:11px;">(이 종은 위치 추적 정보 없음)</span>';
 				m.bindPopup(`
 					<div class="eb-pop-title">${escHtml(o.comName || o.sciName)}</div>
 					<div class="eb-pop-sci">${escHtml(o.sciName)}</div>
 					<div class="eb-pop-sub">${escHtml(o.locName)} · ${escHtml(o.obsDt)}${o.howMany ? ' · ' + o.howMany + '개체' : ''}</div>
-					<a class="eb-pop-link" href="${mapLinkFor(o.lat, o.lng)}" target="_blank" rel="noopener">네이버 지도에서 길찾기</a><br>
+					<a class="eb-pop-link" href="${mapLinkFor(o.lat, o.lng)}" target="_blank" rel="noopener">네이버 지도에서 길찾기</a>
 					${trackBtn}
 				`);
 				notableLayer.addLayer(m);
@@ -146,30 +136,7 @@
 		} catch (e) { console.error('notable load failed', e); }
 	}
 
-	// "현재 화면 주변 핫스팟 찾기" 버튼: 지도 중심 좌표 기준 반경 내 핫스팟을 추가로 불러온다.
-	async function loadNear() {
-		const statusEl = document.getElementById('eb-status');
-		const c = map.getCenter();
-		statusEl.textContent = '주변 핫스팟 찾는 중...';
-		try {
-			const res = await fetch(`${EBIRD_API}/hotspots/near?lat=${c.lat}&lng=${c.lng}&dist=30&limit=40`).then(r => r.json());
-			if (!res || res.error) { statusEl.textContent = res && res.error ? res.error : '주변 핫스팟을 못 찾았습니다.'; return; }
-			nearLayer.clearLayers();
-			(res.hotspots || []).forEach(h => {
-				if (h.lat == null || h.lng == null) return;
-				const m = L.marker([h.lat, h.lng], { icon: nearIcon() });
-				m.bindPopup(`
-					<div class="eb-pop-title">${escHtml(h.name)}</div>
-					<div class="eb-pop-sub">지금까지 ${h.numSpeciesAllTime ?? '-'}종 관찰 · 최근 관찰 ${escHtml(h.latestObsDt) || '-'}</div>
-					<a class="eb-pop-link" href="${mapLinkFor(h.lat, h.lng)}" target="_blank" rel="noopener">네이버 지도에서 길찾기</a>
-				`);
-				nearLayer.addLayer(m);
-			});
-			statusEl.textContent = `주변 핫스팟 ${nearLayer.getLayers().length}곳 찾음`;
-		} catch (e) { console.error('near hotspots load failed', e); statusEl.textContent = '주변 핫스팟을 못 불러왔습니다.'; }
-	}
-
-	// 희귀종 소식 팝업의 "이 종 최근 위치 더보기"에서 호출. 그 종의 최근 관찰 위치를 노란 점으로 찍는다.
+	// 희귀종 소식 팝업의 "이 새 최근 위치 더보기"에서 호출. 그 종의 최근 관찰 위치를 노란 점으로 찍는다.
 	async function trackSpecies(speciesCode, label) {
 		const statusEl = document.getElementById('eb-status');
 		statusEl.textContent = `${label} 최근 위치 찾는 중...`;
@@ -189,8 +156,12 @@
 				`);
 				speciesLayer.addLayer(m);
 			});
-			if (pts.length) map.fitBounds(pts, { padding: [40, 40], maxZoom: 12 });
-			statusEl.textContent = `${label} 최근 위치 ${pts.length}곳`;
+			if (pts.length) {
+				map.fitBounds(pts, { padding: [40, 40], maxZoom: 12 });
+				statusEl.textContent = `${label} 최근 위치 ${pts.length}곳 (노란 점)`;
+			} else {
+				statusEl.textContent = `${label}: 최근 30일간 다른 관찰 기록이 없습니다.`;
+			}
 		} catch (e) { console.error('species track failed', e); statusEl.textContent = '종 위치를 못 불러왔습니다.'; }
 	}
 
@@ -207,14 +178,9 @@
 	document.getElementById('chk-notable').addEventListener('change', (e) => {
 		if (e.target.checked) map.addLayer(notableLayer); else map.removeLayer(notableLayer);
 	});
-	document.getElementById('chk-near').addEventListener('change', (e) => {
-		if (e.target.checked) map.addLayer(nearLayer); else map.removeLayer(nearLayer);
-	});
 	document.getElementById('chk-species').addEventListener('change', (e) => {
 		if (e.target.checked) map.addLayer(speciesLayer); else map.removeLayer(speciesLayer);
 	});
-	document.getElementById('btn-near').addEventListener('click', loadNear);
-
 	loadAll();
 </script>
 </body>
