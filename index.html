@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>eBird 한국 지도</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
+<link href="https://cdn.maptiler.com/maptiler-sdk-js/v3.9.0/maptiler-sdk.css" rel="stylesheet"/>
 <style>
 	html, body { margin: 0; padding: 0; height: 100%; background: #111; font-family: -apple-system, "Malgun Gothic", sans-serif; }
 	#map { position: absolute; top: 56px; left: 0; right: 0; bottom: 0; }
@@ -48,6 +49,8 @@
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://cdn.maptiler.com/maptiler-sdk-js/v3.9.0/maptiler-sdk.umd.min.js"></script>
+<script src="https://cdn.maptiler.com/leaflet-maptilersdk/v4.1.1/leaflet-maptilersdk.js"></script>
 <script>
 	// 이 페이지는 계통도 앱(bird-phylogeny-2d)과는 별개의 독립 사이트다.
 	// 데이터는 같은 eBird 중계 서버(라즈베리파이)를 그대로 공유해서 쓴다.
@@ -56,15 +59,33 @@
 
 	const map = L.map('map', { zoomControl: true }).setView([36.5, 127.8], 7);
 	// MapTiler 무료 API 키(가입 시 발급, 비상업적 사용 무료 한도 내).
+	// 벡터 타일 기반(leaflet-maptilersdk)이라 지명 언어를 처음부터 한국어로 고정할 수 있다.
 	const MAPTILER_KEY = '2N9L4dWVjb7d6W38WzUy';
-	L.tileLayer(`https://api.maptiler.com/maps/streets-v4/256/{z}/{x}/{y}.png?key=${MAPTILER_KEY}`, {
-		maxZoom: 20,
-		attribution: '&copy; <a href="https://www.maptiler.com/copyright/">MapTiler</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+	L.maptiler.maptilerLayer({
+		apiKey: MAPTILER_KEY,
+		style: L.MaptilerStyle ? L.MaptilerStyle.STREETS : undefined,
+		language: L.MaptilerLanguage ? L.MaptilerLanguage.KOREAN : undefined
 	}).addTo(map);
 
 	const hotspotLayer = L.layerGroup().addTo(map);
 	const notableLayer = L.layerGroup().addTo(map);
 	const speciesLayer = L.layerGroup().addTo(map);   // 특정 종의 최근 관찰 위치("종 추적")
+
+	// 계통도 앱(bird-phylogeny-2d) 저장소의 Metadata_2D.json을 그대로 가져다,
+	// eBird speciesCode(ebird_code) 기준으로 한글 이름을 찾는다.
+	const KO_NAME_URL = 'https://raw.githubusercontent.com/generalred-kr/bird-phylogeny-2d/main/Metadata_2D.json';
+	let koByEbirdCode = {};
+	async function loadKoreanNames() {
+		try {
+			const data = await fetch(KO_NAME_URL).then(r => r.json());
+			Object.values(data).forEach(d => {
+				if (d && d.ebird_code && d.ko) koByEbirdCode[d.ebird_code] = d.ko;
+			});
+		} catch (e) { console.error('한글 이름 데이터를 못 불러왔습니다', e); }
+	}
+	function koreanName(speciesCode, fallback) {
+		return (speciesCode && koByEbirdCode[speciesCode]) || fallback;
+	}
 
 	function escHtml(s) {
 		return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -120,12 +141,13 @@
 			if (!res || !res.notable) return;
 			res.notable.forEach(o => {
 				if (o.lat == null || o.lng == null) return;
+				const displayName = koreanName(o.speciesCode, o.comName || o.sciName);
 				const m = L.marker([o.lat, o.lng], { icon: notableIcon() });
 				const trackBtn = o.speciesCode
-					? `<br><a class="eb-pop-link" href="#" onclick="trackSpecies('${o.speciesCode}', '${escHtml(o.comName || o.sciName).replace(/'/g, "\\'")}');return false;">🟡 이 새 최근 위치 더보기</a>`
+					? `<br><a class="eb-pop-link" href="#" onclick="trackSpecies('${o.speciesCode}', '${escHtml(displayName).replace(/'/g, "\\'")}');return false;">🟡 이 새 최근 위치 더보기</a>`
 					: '<br><span style="color:#666;font-size:11px;">(이 종은 위치 추적 정보 없음)</span>';
 				m.bindPopup(`
-					<div class="eb-pop-title">${escHtml(o.comName || o.sciName)}</div>
+					<div class="eb-pop-title">${escHtml(displayName)}</div>
 					<div class="eb-pop-sci">${escHtml(o.sciName)}</div>
 					<div class="eb-pop-sub">${escHtml(o.locName)} · ${escHtml(o.obsDt)}${o.howMany ? ' · ' + o.howMany + '개체' : ''}</div>
 					<a class="eb-pop-link" href="${mapLinkFor(o.lat, o.lng)}" target="_blank" rel="noopener">네이버 지도에서 길찾기</a>
@@ -168,6 +190,7 @@
 	async function loadAll() {
 		const statusEl = document.getElementById('eb-status');
 		statusEl.textContent = '불러오는 중...';
+		await loadKoreanNames();
 		await Promise.all([loadHotspots(), loadNotable()]);
 		statusEl.textContent = `핫스팟 ${hotspotLayer.getLayers().length}곳 · 희귀종 소식 ${notableLayer.getLayers().length}건`;
 	}
