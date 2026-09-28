@@ -60,7 +60,7 @@
 	const map = L.map('map', { zoomControl: true }).setView([36.5, 127.8], 7);
 	// MapTiler 무료 API 키(가입 시 발급, 비상업적 사용 무료 한도 내).
 	const MAPTILER_KEY = '2N9L4dWVjb7d6W38WzUy';
-	L.tileLayer(`https://api.maptiler.com/maps/dataviz-dark/256/{z}/{x}/{y}.png?key=${MAPTILER_KEY}`, {
+	L.tileLayer(`https://api.maptiler.com/maps/streets-v4/256/{z}/{x}/{y}.png?key=${MAPTILER_KEY}`, {
 		maxZoom: 20,
 		attribution: '&copy; <a href="https://www.maptiler.com/copyright/">MapTiler</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
 	}).addTo(map);
