@@ -28,6 +28,15 @@
 	.eb-pop-link:hover { text-decoration: underline; }
 	.eb-legend { position: absolute; bottom: 20px; left: 10px; z-index: 1000; background: rgba(27,27,27,0.9); color: #ccc; padding: 8px 12px; border-radius: 8px; font-size: 12px; line-height: 1.8; }
 	.eb-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+	#top100-modal {
+		display: none; position: absolute; top: 70px; right: 14px; z-index: 1001;
+		width: 300px; max-height: 70vh; overflow-y: auto; background: #1b1b1b; color: #eee;
+		border: 1px solid #444; border-radius: 10px; padding: 12px 14px; box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+	}
+	#top100-modal h3 { margin: 0 0 8px; font-size: 14px; color: #FFD700; display: flex; justify-content: space-between; align-items: center; }
+	#top100-modal .t100-close { cursor: pointer; color: #999; font-size: 16px; line-height: 1; }
+	#top100-modal ol { margin: 0; padding-left: 22px; font-size: 13px; line-height: 1.8; }
+	#top100-modal li span { color: #9ad; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -37,6 +46,12 @@
 	<label class="eb-toggle"><input type="checkbox" id="chk-hotspot" checked> 핫스팟</label>
 	<label class="eb-toggle"><input type="checkbox" id="chk-notable" checked> 희귀종 소식</label>
 	<label class="eb-toggle"><input type="checkbox" id="chk-species" checked> 종 추적</label>
+	<label class="eb-toggle"><input type="checkbox" id="chk-myobs" checked> 내 관찰 기록</label>
+	<button class="eb-btn" id="btn-myobs-upload" type="button">📂 내 관찰 기록 올리기 (eBird CSV)</button>
+	<input type="file" id="file-myobs" accept=".csv" style="display:none;">
+	<button class="eb-btn" id="btn-myobs-clear" type="button" style="display:none;">지우기</button>
+	<label class="eb-toggle"><input type="checkbox" id="chk-checklist" checked> 최근 체크리스트</label>
+	<button class="eb-btn" id="btn-top100" type="button">🏆 관찰왕 Top100</button>
 	<span id="eb-status">불러오는 중...</span>
 </div>
 
@@ -45,6 +60,12 @@
 	<div><span class="eb-dot" style="background:#5ac8fa;"></span>핫스팟 (관찰 종 수)</div>
 	<div><span class="eb-dot" style="background:#ff5555;"></span>희귀종 소식 (최근 30일)</div>
 	<div><span class="eb-dot" style="background:#FFD700;"></span>종 추적: 희귀종 소식 점을 클릭 → 팝업의 "이 새 최근 위치 더보기" 누르면 표시</div>
+	<div><span class="eb-dot" style="background:#b36bff;"></span>내 관찰 기록: eBird "Download my data" CSV 업로드 (파일은 내 브라우저에만 남고 어디로도 전송되지 않음)</div>
+	<div><span class="eb-dot" style="background:#4ee0a0;"></span>최근 체크리스트 (오늘 기준, 누가 어디서 몇 종 봤는지)</div>
+</div>
+<div id="top100-modal">
+	<h3>관찰왕 Top100 <span class="t100-close" id="top100-close">✕</span></h3>
+	<div id="top100-body">불러오는 중...</div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
@@ -66,21 +87,30 @@
 	const hotspotLayer = L.layerGroup().addTo(map);
 	const notableLayer = L.layerGroup().addTo(map);
 	const speciesLayer = L.layerGroup().addTo(map);   // 특정 종의 최근 관찰 위치("종 추적")
+	const myObsLayer = L.layerGroup().addTo(map);     // 업로드한 내 관찰 기록(CSV)
+	const checklistLayer = L.layerGroup().addTo(map); // 최근 체크리스트 피드
 
 	// 계통도 앱(bird-phylogeny-2d) 저장소의 Metadata_2D.json을 그대로 가져다,
-	// eBird speciesCode(ebird_code) 기준으로 한글 이름을 찾는다.
+	// eBird speciesCode(ebird_code) 기준, 그리고 학명(n) 기준으로도 한글 이름을 찾는다.
 	const KO_NAME_URL = 'https://raw.githubusercontent.com/generalred-kr/bird-phylogeny-2d/main/Metadata_2D.json';
 	let koByEbirdCode = {};
+	let koBySciName = {};
+	function _normName(s) { return (s || '').toLowerCase().replace(/[\s_]/g, ''); }
 	async function loadKoreanNames() {
 		try {
 			const data = await fetch(KO_NAME_URL).then(r => r.json());
 			Object.values(data).forEach(d => {
-				if (d && d.ebird_code && d.ko) koByEbirdCode[d.ebird_code] = d.ko;
+				if (!d || !d.ko) return;
+				if (d.ebird_code) koByEbirdCode[d.ebird_code] = d.ko;
+				if (d.n) koBySciName[_normName(d.n)] = d.ko;
 			});
 		} catch (e) { console.error('한글 이름 데이터를 못 불러왔습니다', e); }
 	}
 	function koreanName(speciesCode, fallback) {
 		return (speciesCode && koByEbirdCode[speciesCode]) || fallback;
+	}
+	function koreanNameBySci(sciName, fallback) {
+		return (sciName && koBySciName[_normName(sciName)]) || fallback;
 	}
 
 	function escHtml(s) {
@@ -111,6 +141,18 @@
 		return L.divIcon({
 			className: '', html: '<div style="width:12px;height:12px;border-radius:50%;background:#FFD700;border:2px solid #6a5200;"></div>',
 			iconSize: [12, 12], iconAnchor: [6, 6]
+		});
+	}
+	function myObsIcon() {
+		return L.divIcon({
+			className: '', html: '<div style="width:13px;height:13px;border-radius:50%;background:#b36bff;border:2px solid #4a2070;"></div>',
+			iconSize: [13, 13], iconAnchor: [7, 7]
+		});
+	}
+	function checklistIcon() {
+		return L.divIcon({
+			className: '', html: '<div style="width:11px;height:11px;border-radius:50%;background:#4ee0a0;border:2px solid #0a5a38;"></div>',
+			iconSize: [11, 11], iconAnchor: [6, 6]
 		});
 	}
 
@@ -204,13 +246,152 @@
 		} catch (e) { console.error('species track failed', e); statusEl.textContent = '종 위치를 못 불러왔습니다.'; }
 	}
 
+	async function loadChecklists() {
+		try {
+			const res = await fetch(`${EBIRD_API}/checklists/recent?region=${encodeURIComponent(EBIRD_NOTABLE_REGION)}&maxResults=50`).then(r => r.json());
+			if (!res || !res.checklists) return;
+			res.checklists.forEach(c => {
+				if (c.lat == null || c.lng == null) return;
+				const m = L.marker([c.lat, c.lng], { icon: checklistIcon() });
+				m.bindPopup(`
+					<div class="eb-pop-title">${escHtml(c.locName)}</div>
+					<div class="eb-pop-sub">${escHtml(c.userDisplayName)} · ${escHtml(c.obsDt)} ${escHtml(c.obsTime || '')}</div>
+					<div class="eb-pop-sub">관찰 ${c.numSpecies ?? '-'}종</div>
+					<a class="eb-pop-link" href="${c.mapLink}" target="_blank" rel="noopener">네이버 지도에서 길찾기</a>
+				`);
+				checklistLayer.addLayer(m);
+			});
+		} catch (e) { console.error('checklists load failed', e); }
+	}
+
+	async function loadTop100() {
+		const body = document.getElementById('top100-body');
+		body.textContent = '불러오는 중...';
+		try {
+			const res = await fetch(`${EBIRD_API}/top100?region=${encodeURIComponent(EBIRD_NOTABLE_REGION)}&maxResults=30`).then(r => r.json());
+			if (!res || !res.top100 || !res.top100.length) { body.textContent = '데이터가 없습니다.'; return; }
+			body.innerHTML = `<div style="color:#888;font-size:11px;margin-bottom:6px;">${escHtml(res.date || '')} 기준 (관찰 종수)</div>` +
+				'<ol>' + res.top100.map(p => `<li>${escHtml(p.name)} <span>${p.numSpecies ?? '-'}종</span></li>`).join('') + '</ol>';
+		} catch (e) { body.textContent = '불러오지 못했습니다.'; }
+	}
+
 	async function loadAll() {
 		const statusEl = document.getElementById('eb-status');
 		statusEl.textContent = '불러오는 중...';
 		await loadKoreanNames();
-		await Promise.all([loadHotspots(), loadNotable()]);
-		statusEl.textContent = `핫스팟 ${hotspotLayer.getLayers().length}곳 · 희귀종 소식 ${notableLayer.getLayers().length}건`;
+		await Promise.all([loadHotspots(), loadNotable(), loadChecklists()]);
+		statusEl.textContent = `핫스팟 ${hotspotLayer.getLayers().length}곳 · 희귀종 소식 ${notableLayer.getLayers().length}건 · 체크리스트 ${checklistLayer.getLayers().length}건`;
 	}
+
+	// ---------------------------------------------------------------------
+	// 내 관찰 기록(eBird "Download my data" CSV)을 브라우저 안에서만 읽어 지도에 표시한다.
+	// 파일은 서버로 전송되지 않고, 이 브라우저 탭 메모리 안에서만 처리된다.
+	// ---------------------------------------------------------------------
+
+	// 쉼표로 구분된 CSV를 읽는다. 값 안에 쉼표/줄바꿈이 들어갈 수 있어 "..." 인용을 처리한다.
+	function parseCSV(text) {
+		const rows = [];
+		let row = [], field = '', inQuotes = false;
+		for (let i = 0; i < text.length; i++) {
+			const c = text[i];
+			if (inQuotes) {
+				if (c === '"') {
+					if (text[i + 1] === '"') { field += '"'; i++; }
+					else { inQuotes = false; }
+				} else { field += c; }
+			} else if (c === '"') {
+				inQuotes = true;
+			} else if (c === ',') {
+				row.push(field); field = '';
+			} else if (c === '\n') {
+				row.push(field); field = '';
+				if (row.length > 1 || row[0] !== '') rows.push(row);
+				row = [];
+			} else if (c === '\r') {
+				// 무시 (\r\n 처리)
+			} else {
+				field += c;
+			}
+		}
+		if (field !== '' || row.length) { row.push(field); rows.push(row); }
+		if (!rows.length) return [];
+		const header = rows[0].map(h => h.trim());
+		return rows.slice(1).map(r => {
+			const obj = {};
+			header.forEach((h, i) => { obj[h] = (r[i] || '').trim(); });
+			return obj;
+		});
+	}
+
+	function renderMyObs(records) {
+		myObsLayer.clearLayers();
+		const statusEl = document.getElementById('eb-status');
+		// 같은 체크리스트(같은 Submission ID, 없으면 장소+날짜)끼리 묶어서 한 점에 여러 종을 보여준다.
+		const groups = {};
+		let skipped = 0;
+		records.forEach(r => {
+			const lat = parseFloat(r['Latitude']);
+			const lng = parseFloat(r['Longitude']);
+			if (isNaN(lat) || isNaN(lng)) { skipped++; return; }
+			const key = r['Submission ID'] || `${r['Location']}|${r['Date']}|${r['Time']}`;
+			if (!groups[key]) {
+				groups[key] = { lat, lng, locName: r['Location'] || '', date: r['Date'] || '', time: r['Time'] || '', species: [] };
+			}
+			const sci = r['Scientific Name'];
+			const com = r['Common Name'];
+			const ko = koreanNameBySci(sci, com || sci);
+			if (ko) groups[key].species.push({ ko, count: r['Count'] || '' });
+		});
+		const list = Object.values(groups);
+		list.forEach(g => {
+			const m = L.marker([g.lat, g.lng], { icon: myObsIcon() });
+			const speciesHtml = g.species.length
+				? g.species.map(s => escHtml(s.ko) + (s.count && s.count !== 'X' ? `(${escHtml(s.count)})` : '')).join(', ')
+				: '(종 정보 없음)';
+			m.bindPopup(`
+				<div class="eb-pop-title">${escHtml(g.locName)}</div>
+				<div class="eb-pop-sub">${escHtml(g.date)} ${escHtml(g.time)}</div>
+				<div class="eb-pop-sub">관찰종 (${g.species.length}): ${speciesHtml}</div>
+				<a class="eb-pop-link" href="${mapLinkFor(g.lat, g.lng)}" target="_blank" rel="noopener">네이버 지도에서 길찾기</a>
+			`);
+			myObsLayer.addLayer(m);
+		});
+		if (list.length) {
+			const pts = list.map(g => [g.lat, g.lng]);
+			map.fitBounds(pts, { padding: [40, 40] });
+		}
+		document.getElementById('btn-myobs-clear').style.display = list.length ? 'inline-block' : 'none';
+		statusEl.textContent = `내 관찰 기록: 체크리스트 ${list.length}건 불러옴${skipped ? ` (좌표 없는 행 ${skipped}개 제외)` : ''}`;
+	}
+
+	document.getElementById('btn-myobs-upload').addEventListener('click', () => {
+		document.getElementById('file-myobs').click();
+	});
+	document.getElementById('file-myobs').addEventListener('change', (e) => {
+		const file = e.target.files && e.target.files[0];
+		if (!file) return;
+		const statusEl = document.getElementById('eb-status');
+		statusEl.textContent = '내 관찰 기록 읽는 중...';
+		const reader = new FileReader();
+		reader.onload = () => {
+			try {
+				const records = parseCSV(reader.result);
+				if (!records.length) { statusEl.textContent = 'CSV에서 데이터를 찾지 못했습니다.'; return; }
+				renderMyObs(records);
+			} catch (err) {
+				console.error('내 관찰 기록 처리 실패', err);
+				statusEl.textContent = 'CSV 처리에 실패했습니다. eBird에서 받은 원본 파일인지 확인해 주세요.';
+			}
+		};
+		reader.onerror = () => { statusEl.textContent = '파일을 읽지 못했습니다.'; };
+		reader.readAsText(file, 'utf-8');
+		e.target.value = '';
+	});
+	document.getElementById('btn-myobs-clear').addEventListener('click', () => {
+		myObsLayer.clearLayers();
+		document.getElementById('btn-myobs-clear').style.display = 'none';
+		document.getElementById('eb-status').textContent = '내 관찰 기록을 지웠습니다.';
+	});
 
 	document.getElementById('chk-hotspot').addEventListener('change', (e) => {
 		if (e.target.checked) map.addLayer(hotspotLayer); else map.removeLayer(hotspotLayer);
@@ -220,6 +401,21 @@
 	});
 	document.getElementById('chk-species').addEventListener('change', (e) => {
 		if (e.target.checked) map.addLayer(speciesLayer); else map.removeLayer(speciesLayer);
+	});
+	document.getElementById('chk-myobs').addEventListener('change', (e) => {
+		if (e.target.checked) map.addLayer(myObsLayer); else map.removeLayer(myObsLayer);
+	});
+	document.getElementById('chk-checklist').addEventListener('change', (e) => {
+		if (e.target.checked) map.addLayer(checklistLayer); else map.removeLayer(checklistLayer);
+	});
+	document.getElementById('btn-top100').addEventListener('click', () => {
+		const modal = document.getElementById('top100-modal');
+		const show = modal.style.display !== 'block';
+		modal.style.display = show ? 'block' : 'none';
+		if (show) loadTop100();
+	});
+	document.getElementById('top100-close').addEventListener('click', () => {
+		document.getElementById('top100-modal').style.display = 'none';
 	});
 	loadAll();
 </script>
