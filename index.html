@@ -271,8 +271,9 @@
 					try {
 						const r2 = await fetch(`${EBIRD_API}/checklist/${encodeURIComponent(c.subId)}`).then(r => r.json());
 						const list = (r2 && r2.species) || [];
+						// comName은 이 엔드포인트에서 늘 비어 있어서, 못 찾으면 speciesCode를 그대로 보여준다.
 						const html = list.length
-							? '관찰종: ' + list.map(s => escHtml(koreanName(s.speciesCode, s.comName))).join(', ')
+							? '관찰종: ' + list.map(s => escHtml(koreanName(s.speciesCode, s.comName || s.speciesCode))).join(', ')
 							: '관찰종 정보가 없습니다.';
 						m.setPopupContent(checklistPopupHtml(c, html));
 					} catch (e) {
@@ -385,6 +386,19 @@
 		statusEl.textContent = `내 관찰 기록: 체크리스트 ${list.length}건 불러옴${skipped ? ` (좌표 없는 행 ${skipped}개 제외)` : ''}`;
 	}
 
+	// 업로드한 CSV를 이 브라우저(localStorage)에 저장해 둬서, 다음에 열 때 다시 올릴 필요가 없게 한다.
+	// 서버로는 전혀 전송되지 않고, 이 기기의 이 브라우저에만 남는다.
+	const MY_OBS_STORAGE_KEY = 'ebirdMapKr_myObsCsv';
+	function saveMyObsCsv(text) {
+		try { localStorage.setItem(MY_OBS_STORAGE_KEY, text); } catch (e) { console.warn('내 관찰 기록 저장 실패(용량 제한 등)', e); }
+	}
+	function loadSavedMyObsCsv() {
+		try { return localStorage.getItem(MY_OBS_STORAGE_KEY); } catch (e) { return null; }
+	}
+	function clearSavedMyObsCsv() {
+		try { localStorage.removeItem(MY_OBS_STORAGE_KEY); } catch (e) {}
+	}
+
 	document.getElementById('btn-myobs-upload').addEventListener('click', () => {
 		document.getElementById('file-myobs').click();
 	});
@@ -399,6 +413,7 @@
 				const records = parseCSV(reader.result);
 				if (!records.length) { statusEl.textContent = 'CSV에서 데이터를 찾지 못했습니다.'; return; }
 				renderMyObs(records);
+				saveMyObsCsv(reader.result);
 			} catch (err) {
 				console.error('내 관찰 기록 처리 실패', err);
 				statusEl.textContent = 'CSV 처리에 실패했습니다. eBird에서 받은 원본 파일인지 확인해 주세요.';
@@ -410,9 +425,20 @@
 	});
 	document.getElementById('btn-myobs-clear').addEventListener('click', () => {
 		myObsLayer.clearLayers();
+		clearSavedMyObsCsv();
 		document.getElementById('btn-myobs-clear').style.display = 'none';
 		document.getElementById('eb-status').textContent = '내 관찰 기록을 지웠습니다.';
 	});
+
+	// 브라우저에 저장된 내 관찰 기록이 있으면 페이지를 열 때 자동으로 불러온다.
+	function loadMyObsFromStorage() {
+		const saved = loadSavedMyObsCsv();
+		if (!saved) return;
+		try {
+			const records = parseCSV(saved);
+			if (records.length) renderMyObs(records);
+		} catch (e) { console.error('저장된 내 관찰 기록을 불러오지 못했습니다', e); }
+	}
 
 	document.getElementById('chk-hotspot').addEventListener('change', (e) => {
 		if (e.target.checked) map.addLayer(hotspotLayer); else map.removeLayer(hotspotLayer);
@@ -438,7 +464,7 @@
 	document.getElementById('top100-close').addEventListener('click', () => {
 		document.getElementById('top100-modal').style.display = 'none';
 	});
-	loadAll();
+	loadAll().then(loadMyObsFromStorage);
 </script>
 </body>
 </html>
