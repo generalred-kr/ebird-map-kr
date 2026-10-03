@@ -246,6 +246,16 @@
 		} catch (e) { console.error('species track failed', e); statusEl.textContent = '종 위치를 못 불러왔습니다.'; }
 	}
 
+	function checklistPopupHtml(c, speciesHtml) {
+		return `
+			<div class="eb-pop-title">${escHtml(c.locName)}</div>
+			<div class="eb-pop-sub">${escHtml(c.userDisplayName)} · ${escHtml(c.obsDt)} ${escHtml(c.obsTime || '')}</div>
+			<div class="eb-pop-sub">관찰 ${c.numSpecies ?? '-'}종</div>
+			<a class="eb-pop-link" href="${c.mapLink}" target="_blank" rel="noopener">네이버 지도에서 길찾기</a>
+			<div class="eb-pop-sub" style="margin-top:6px;">${speciesHtml}</div>
+		`;
+	}
+
 	async function loadChecklists() {
 		try {
 			const res = await fetch(`${EBIRD_API}/checklists/recent?region=${encodeURIComponent(EBIRD_NOTABLE_REGION)}&maxResults=50`).then(r => r.json());
@@ -253,12 +263,23 @@
 			res.checklists.forEach(c => {
 				if (c.lat == null || c.lng == null) return;
 				const m = L.marker([c.lat, c.lng], { icon: checklistIcon() });
-				m.bindPopup(`
-					<div class="eb-pop-title">${escHtml(c.locName)}</div>
-					<div class="eb-pop-sub">${escHtml(c.userDisplayName)} · ${escHtml(c.obsDt)} ${escHtml(c.obsTime || '')}</div>
-					<div class="eb-pop-sub">관찰 ${c.numSpecies ?? '-'}종</div>
-					<a class="eb-pop-link" href="${c.mapLink}" target="_blank" rel="noopener">네이버 지도에서 길찾기</a>
-				`);
+				m.bindPopup(checklistPopupHtml(c, c.subId ? '관찰종 불러오는 중...' : '(관찰종 정보 없음)'));
+				let loaded = false;
+				m.on('popupopen', async () => {
+					if (loaded || !c.subId) return;
+					loaded = true;
+					try {
+						const r2 = await fetch(`${EBIRD_API}/checklist/${encodeURIComponent(c.subId)}`).then(r => r.json());
+						const list = (r2 && r2.species) || [];
+						const html = list.length
+							? '관찰종: ' + list.map(s => escHtml(koreanName(s.speciesCode, s.comName))).join(', ')
+							: '관찰종 정보가 없습니다.';
+						m.setPopupContent(checklistPopupHtml(c, html));
+					} catch (e) {
+						loaded = false;
+						m.setPopupContent(checklistPopupHtml(c, '관찰종을 불러오지 못했습니다.'));
+					}
+				});
 				checklistLayer.addLayer(m);
 			});
 		} catch (e) { console.error('checklists load failed', e); }
